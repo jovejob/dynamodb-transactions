@@ -1,0 +1,27 @@
+version: "3.8"
+
+services:
+  dynamodb:
+    image: amazon/dynamodb-local
+    container_name: dynamodb-local
+    ports:
+      - "8000:8000"
+    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
+
+  appdynamo:
+    build: .
+    container_name: dynamodb-app
+    env_file:
+      - .env.docker
+    depends_on:
+      - dynamodb
+    command: >
+      sh -c "
+        echo 'Waiting for DynamoDB...' &&
+        npx wait-on tcp:dynamodb:8000 &&
+        echo 'Setting up tables...' &&
+        npm run setup-db &&
+        echo 'Running app script...' &&
+        npm run start
+        tail -f /dev/null
+      "
