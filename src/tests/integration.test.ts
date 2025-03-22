@@ -3,6 +3,7 @@ import { getBalance } from "../services/balanceService";
 import { docClient } from "../utils/dynamoClient";
 import { PutCommand, DeleteCommand } from "@aws-sdk/lib-dynamodb";
 
+import { TransactionType } from "../interfaces/TransactInput";
 import { clearTransactionsTable } from "../utils/testHelpers";
 
 const TEST_USER_ID = "test-user";
@@ -58,26 +59,31 @@ describe("Integration Tests (Real DynamoDB)", () => {
   });
 
   it("should process a credit transaction successfully", async () => {
-    await transact({ userId: TEST_USER_ID, idempotentKey: "txn-credit-1", amount: 50, type: "credit" });
+    await transact({ userId: TEST_USER_ID, idempotentKey: "txn-credit-1", amount: 50, type: TransactionType.CREDIT });
     const newBalance = await getBalance(TEST_USER_ID);
     expect(newBalance).toBe(150);
   });
 
   it("should process a debit transaction successfully", async () => {
-    await transact({ userId: TEST_USER_ID, idempotentKey: "txn-debit-1", amount: 30, type: "debit" });
+    await transact({ userId: TEST_USER_ID, idempotentKey: "txn-debit-1", amount: 30, type: TransactionType.DEBIT });
     const newBalance = await getBalance(TEST_USER_ID);
     expect(newBalance).toBe(70);
   });
 
   it("should prevent a duplicate transaction (idempotency check)", async () => {
-    await transact({ userId: TEST_USER_ID, idempotentKey: "txn-idem-1", amount: 20, type: "credit" });
+    await transact({ userId: TEST_USER_ID, idempotentKey: "txn-idem-1", amount: 20, type: TransactionType.CREDIT });
     const balanceAfterFirst = await getBalance(TEST_USER_ID);
 
-    await transact({ userId: TEST_USER_ID, idempotentKey: "txn-idem-1", amount: 20, type: "credit" }); // Duplicate
-    const balanceAfterDuplicate = await getBalance(TEST_USER_ID);
+    try {
+      await transact({ userId: TEST_USER_ID, idempotentKey: "txn-idem-1", amount: 20, type: TransactionType.CREDIT }); // Duplicate
+    } catch (err: any) {
+      expect(err.message).toContain("Duplicate transaction detected");
+    }
 
+    const balanceAfterDuplicate = await getBalance(TEST_USER_ID);
     expect(balanceAfterFirst).toBe(balanceAfterDuplicate); // Should be unchanged
   });
+
 
   it("should prevent overdrawing the balance (balance should not go below 0)", async () => {
     const before = await getBalance(TEST_USER_ID);
@@ -87,7 +93,7 @@ describe("Integration Tests (Real DynamoDB)", () => {
         userId: TEST_USER_ID,
         idempotentKey: "txn-overdraw-1",
         amount: 1000,
-        type: "debit"
+        type: TransactionType.DEBIT
       })
     ).rejects.toThrow("Insufficient funds.");
 
@@ -102,14 +108,14 @@ describe("Integration Tests (Real DynamoDB)", () => {
       userId: TEST_USER_ID,
       idempotentKey: "txn-concurrent-1",
       amount: 30,
-      type: "debit"
+      type: TransactionType.DEBIT
     });
 
     const t2 = transact({
       userId: TEST_USER_ID,
       idempotentKey: "txn-concurrent-2",
       amount: 30,
-      type: "debit"
+      type: TransactionType.DEBIT
     });
 
     await Promise.allSettled([t1, t2]);

@@ -1,52 +1,42 @@
+/**
+ * This script demonstrates usage of getBalance and transact functions.
+ * It is not part of the production code, but can be run to verify functionality
+ * (we have the tests if u want to check more).
+ */
 import { getBalance } from "./services/balanceService";
 import { transact } from "./services/transactionService";
 import { docClient } from "./utils/dynamoClient";
 import { PutCommand } from "@aws-sdk/lib-dynamodb";
-
-console.log("App started... running test script.");
+import { TransactionType } from "./interfaces/TransactInput";
 
 async function ensureUserExists(userId: string) {
-  try {
-    console.log(`Ensuring user ${userId} exists with balance 100...`);
-    await docClient.send(
-      new PutCommand({
-        TableName: "UserBalances",
-        Item: {
-          userId,
-          balance: 100
-        }
-      })
-    );
-    console.log(`User ${userId} ensured.`);
-  } catch (err) {
-    console.error("Failed to ensure user:", err);
-    throw err;
-  }
+  await docClient.send(
+    new PutCommand({
+      TableName: "UserBalances",
+      Item: {
+        userId,
+        balance: 100
+      }
+    })
+  );
 }
 
-async function test() {
-  try {
-    const userId = "user-1";
-    const idempotentKey = "txn-123";
+async function main() {
+  const userId = "user-1";
+  const idempotentKey = "txn-demo-123";
 
-    await ensureUserExists(userId);
+  await ensureUserExists(userId);
 
-    console.log("Fetching initial balance...");
-    const balance = await getBalance(userId);
-    console.log("Initial Balance:", balance);
+  const initial = await getBalance(userId);
+  console.log(`Initial balance: ${initial}`);
 
-    console.log("Processing credit transaction...");
-    await transact({ userId, idempotentKey, amount: 50, type: "credit" });
+  await transact({ userId, idempotentKey, amount: 50, type: TransactionType.CREDIT });
 
-    console.log("Fetching new balance...");
-    const updatedBalance = await getBalance(userId);
-    console.log("Updated Balance:", updatedBalance);
-  } catch (e) {
-    console.error("test() failed:", e);
-  }
+  const updated = await getBalance(userId);
+  console.log(`Updated balance: ${updated}`);
 }
 
-test().catch((err) => {
-  console.error("Unhandled error in test():", err);
+main().catch((err) => {
+  console.error("Demo script failed:", err);
   process.exit(1);
 });

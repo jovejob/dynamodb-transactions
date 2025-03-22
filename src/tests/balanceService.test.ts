@@ -1,6 +1,6 @@
 import { getBalance } from "../services/balanceService";
 import { docClient } from "../utils/dynamoClient";
-import { GetCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 
 jest.mock("../utils/dynamoClient", () => ({
   docClient: {
@@ -20,6 +20,7 @@ describe("getBalance function", () => {
 
     const balance = await getBalance("user-1");
     expect(balance).toBe(200);
+
     expect(docClient.send).toHaveBeenCalledWith(expect.any(GetCommand));
   });
 

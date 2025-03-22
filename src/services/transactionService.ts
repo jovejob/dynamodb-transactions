@@ -1,13 +1,13 @@
 import { docClient } from "../utils/dynamoClient";
-import { TransactWriteCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
+import { TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { getBalance } from "./balanceService";
+import { InsufficientFundsError } from "../errors/InsufficientFundsError";
+import { TransactInput, TransactionType } from "../interfaces/TransactInput";
+import { handleDynamoTransactionError } from "../utils/parseDynamoError";
 
-const TABLE_NAME = "UserBalances";
+const USER_BALANCE_TABLE = "UserBalances";
 const TRANSACTION_TABLE = "TransactionRecords";
 
-type TransactionType = "credit" | "debit";
-
-// Internal-only low-level logic (expects validated input)
 async function transactInternal(
   userId: string,
   idempotentKey: string,
@@ -15,64 +15,58 @@ async function transactInternal(
   type: TransactionType
 ): Promise<void> {
   try {
-    // Prevent duplicate transactions using idempotentKey
-    const existingTransaction = await docClient.send(
-      new GetCommand({
-        TableName: TRANSACTION_TABLE,
-        Key: { idempotentKey }
+    // Retrieve user balance from DynamoDB (from Task 1)
+    const currentBalance = await getBalance(userId);
+
+    const newBalance =
+      type === TransactionType.CREDIT
+        ? currentBalance + amount
+        : currentBalance - amount;
+
+    if (newBalance < 0) {
+      // Prevent balance from dropping below zero (from Task 2)
+      throw new InsufficientFundsError();
+    }
+
+    await docClient.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Put: {
+              TableName: TRANSACTION_TABLE,
+              Item: { idempotentKey, userId, amount, type },
+              ConditionExpression: "attribute_not_exists(idempotentKey)"
+              // Enforce idempotency - no duplicate transactions (from Task 2)
+            }
+          },
+          {
+            Update: {
+              TableName: USER_BALANCE_TABLE,
+              Key: { userId },
+              UpdateExpression: "SET balance = :newBalance",
+              ConditionExpression: "balance >= :amount OR attribute_not_exists(balance)",
+              ExpressionAttributeValues: {
+                ":newBalance": newBalance,
+                ":amount": amount
+              }
+              // Ensure atomic update to prevent race conditions (from Task 2)
+            }
+          }
+        ]
       })
     );
 
-    if (existingTransaction.Item) {
-      console.log("Duplicate transaction detected, skipping.");
-      return;
-    }
-
-    // Retrieve user balance safely
-    const userBalance = await getBalance(userId);
-
-    // Prevent balance from going below zero
-    let newBalance = type === "credit" ? userBalance + amount : userBalance - amount;
-    if (newBalance < 0) {
-      throw new Error("Insufficient funds.");
-    }
-
-    // Use TransactWriteCommand for atomic transaction handling
-    await docClient.send(new TransactWriteCommand({
-      TransactItems: [
-        {
-          Put: {
-            TableName: TRANSACTION_TABLE,
-            Item: { idempotentKey, userId, amount, type }
-          }
-        },
-        {
-          Update: {
-            TableName: TABLE_NAME,
-            Key: { userId },
-            UpdateExpression: "SET balance = :newBalance",
-            ConditionExpression: "balance >= :amount OR attribute_not_exists(balance)",
-            ExpressionAttributeValues: {
-              ":newBalance": newBalance,
-              ":amount": amount
-            }
-          }
-        }
-      ]
-    }));
-
     console.log(`Transaction successful: ${type} ${amount} for user ${userId}`);
   } catch (error: any) {
-    console.error("Transaction failed:", error);
-    throw new Error("Transaction could not be processed: " + error.message);
+    // Catch and map DynamoDB transaction failure reasons (for Task2)
+    handleDynamoTransactionError(error);
   }
 }
 
-// Public-facing validated entry point
-export async function transact(raw: any): Promise<void> {
+export async function transact(raw: TransactInput): Promise<void> {
+  // Input validation (Task 2)
   const { userId, idempotentKey, amount, type } = raw;
 
-  // Input validation
   if (!userId || typeof userId !== "string") {
     throw new Error("Invalid userId: must be a non-empty string.");
   }
@@ -82,13 +76,9 @@ export async function transact(raw: any): Promise<void> {
   if (typeof amount !== "number" || amount <= 0) {
     throw new Error("Invalid amount: must be a positive number.");
   }
-  if (type !== "credit" && type !== "debit") {
+  if (!Object.values(TransactionType).includes(type)) {
     throw new Error("Invalid transaction type: must be 'credit' or 'debit'.");
   }
 
-  // Safe cast
-  const safeType = type as TransactionType;
-
-  // Call the internal logic
-  return transactInternal(userId, idempotentKey, amount, safeType);
+  return transactInternal(userId, idempotentKey, amount, type);
 }

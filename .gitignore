@@ -1,4 +1,15 @@
+# Node
 node_modules
+*.log
+
+# Env files
 .env
 .env.local
 .env.docker
+
+# Editor/IDE
+.vscode/
+.idea/
+
+# MacOS
+.DS_Store
